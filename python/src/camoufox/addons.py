@@ -1,7 +1,7 @@
 import os
 import shutil
+import uuid
 from enum import Enum
-from multiprocessing import Lock
 from typing import List, Optional
 
 from .exceptions import InvalidAddonPath
@@ -43,9 +43,7 @@ def add_default_addons(
         exclude_list = []
 
     addons = [addon for addon in DefaultAddons if addon not in exclude_list]
-
-    with Lock():
-        maybe_download_addons(addons, addons_list)
+    maybe_download_addons(addons, addons_list)
 
 
 def download_and_extract(url: str, extract_path: str, name: str) -> None:
@@ -64,34 +62,37 @@ def get_addon_path(addon_name: str) -> str:
     return str(ADDONS_DIR / addon_name)
 
 
+def install_addon(addon: DefaultAddons, addon_path: str) -> None:
+    """
+    Extracts an addon beside its cache path, then renames it into place, so a
+    concurrent launch sees either no addon or a complete one.
+    """
+    staging = os.path.join(os.path.dirname(addon_path), f".{addon.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        download_and_extract(addon.value, staging, addon.name)
+        try:
+            os.rename(staging, addon_path)
+        except OSError:
+            # Another launch finished first. A directory without a manifest is
+            # left by an extraction an older release was killed in.
+            if os.path.exists(os.path.join(addon_path, 'manifest.json')):
+                return
+            shutil.rmtree(addon_path)
+            os.rename(staging, addon_path)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def maybe_download_addons(
     addons: List[DefaultAddons], addons_list: Optional[List[str]] = None
 ) -> None:
     """
-    Downloads and extracts addons from a given dictionary to a specified list
-    Skips downloading if the addon is already downloaded
+    Downloads and extracts the given addons, adding their paths to addons_list.
+    Skips downloading if the addon is already extracted.
     """
     for addon in addons:
-        # Get the addon path
         addon_path = get_addon_path(addon.name)
-
-        # Check if the addon is already extracted. A bare directory is not
-        # enough: a failed download leaves an empty dir behind, so require the
-        # manifest that confirm_paths() looks for.
-        if os.path.exists(os.path.join(addon_path, 'manifest.json')):
-            # Add the existing addon path to addons_list
-            if addons_list is not None:
-                addons_list.append(addon_path)
-            continue
-
-        # Addon isn't extracted, create directory and download
-        try:
-            os.makedirs(addon_path, exist_ok=True)
-            download_and_extract(addon.value, addon_path, addon.name)
-            # Add the new addon directory path to addons_list
-            if addons_list is not None:
-                addons_list.append(addon_path)
-        except Exception as e:
-            # Drop the partial directory so the next run re-downloads.
-            shutil.rmtree(addon_path, ignore_errors=True)
-            print(f"Failed to download and extract {addon.name}: {e}")
+        if not os.path.exists(os.path.join(addon_path, 'manifest.json')):
+            install_addon(addon, addon_path)
+        if addons_list is not None:
+            addons_list.append(addon_path)

@@ -1,7 +1,7 @@
 /**
  * Mirrors python/tests/test_addons.py: regression guard for #308, where a
  * failed first download left an empty addon directory that was trusted
- * forever afterwards.
+ * forever afterwards, and for concurrent launches sharing a cold cache.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -38,7 +38,9 @@ function writeManifest(extractPath: string) {
 }
 
 it("re-downloads a partial (manifest-less) directory", async () => {
+	// Left by an extraction that was killed before writing the manifest.
 	fs.mkdirSync(ubo, { recursive: true });
+	fs.writeFileSync(path.join(ubo, "background.js"), "");
 	const calls: string[] = [];
 	addons.addonsDeps.downloadAndExtract = async (_url, extractPath, name) => {
 		calls.push(name);
@@ -64,20 +66,56 @@ it("does not re-download an extracted addon", async () => {
 	expect(out).toEqual([ubo]);
 });
 
-it("removes the partial directory when a download fails", async () => {
+it("raises and leaves nothing behind when a download fails", async () => {
 	addons.addonsDeps.downloadAndExtract = async (_url, extractPath) => {
 		fs.mkdirSync(extractPath, { recursive: true }); // partial write, then die
 		throw new Error("network died mid-download");
 	};
-	const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
-	const out: string[] = [];
-	await addons.maybeDownloadAddons({ ...addons.DefaultAddons }, out);
+	// Launching without the addon would be a different browser than asked for.
+	await expect(
+		addons.maybeDownloadAddons({ ...addons.DefaultAddons }, []),
+	).rejects.toThrow("network died mid-download");
+	const dir = path.dirname(ubo);
+	expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([]);
+});
 
-	expect(fs.existsSync(ubo)).toBe(false);
-	expect(out).toEqual([]);
-	expect(log).toHaveBeenCalledWith(
-		"Failed to download and extract UBO: Error: network died mid-download",
+it("never hands a concurrent launch a half-extracted addon", async () => {
+	// Parallel launches on a cold cache: one is still extracting when another
+	// checks the cache. The second must not be handed that addon.
+	let releaseFirst!: () => void;
+	const firstBlocked = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	let firstStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		firstStarted = resolve;
+	});
+	let calls = 0;
+	addons.addonsDeps.downloadAndExtract = async (_url, extractPath) => {
+		writeManifest(extractPath);
+		if (calls++ === 0) {
+			firstStarted();
+			await firstBlocked;
+		}
+		fs.writeFileSync(path.join(extractPath, "background.js"), "");
+	};
+
+	const firstOut: string[] = [];
+	const first = addons.maybeDownloadAddons(
+		{ ...addons.DefaultAddons },
+		firstOut,
 	);
-	log.mockRestore();
+	await started;
+	try {
+		const secondOut: string[] = [];
+		await addons.maybeDownloadAddons({ ...addons.DefaultAddons }, secondOut);
+		expect(secondOut).toEqual([ubo]);
+		expect(fs.existsSync(path.join(ubo, "background.js"))).toBe(true);
+	} finally {
+		releaseFirst();
+		await first;
+	}
+	expect(firstOut).toEqual([ubo]);
+	expect(fs.readdirSync(path.dirname(ubo))).toEqual(["UBO"]);
 });

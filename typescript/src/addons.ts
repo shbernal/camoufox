@@ -3,6 +3,7 @@
  *
  * TypeScript twin of python/src/camoufox/addons.py.
  */
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { InvalidAddonPath } from "./exceptions.js";
@@ -79,8 +80,37 @@ export const addonsDeps = {
 };
 
 /**
+ * Extracts an addon beside its cache path, then renames it into place, so a
+ * concurrent launch sees either no addon or a complete one.
+ */
+async function installAddon(
+	addonName: string,
+	url: string,
+	addonPath: string,
+): Promise<void> {
+	const staging = path.join(
+		path.dirname(addonPath),
+		`.${addonName}.${randomUUID()}.tmp`,
+	);
+	try {
+		await addonsDeps.downloadAndExtract(url, staging, addonName);
+		try {
+			fs.renameSync(staging, addonPath);
+		} catch {
+			// Another launch finished first. A directory without a manifest is
+			// left by an extraction an older release was killed in.
+			if (fs.existsSync(path.join(addonPath, "manifest.json"))) return;
+			fs.rmSync(addonPath, { recursive: true });
+			fs.renameSync(staging, addonPath);
+		}
+	} finally {
+		fs.rmSync(staging, { recursive: true, force: true });
+	}
+}
+
+/**
  * Downloads and extracts addons from a given map into the given list.
- * Skips downloading if the addon is already downloaded.
+ * Skips downloading if the addon is already extracted.
  */
 export async function maybeDownloadAddons(
 	addons: Record<string, string>,
@@ -88,23 +118,9 @@ export async function maybeDownloadAddons(
 ): Promise<void> {
 	for (const [addonName, url] of Object.entries(addons)) {
 		const addonPath = getAddonPath(addonName);
-
-		// Check if the addon is already extracted. A bare directory is not
-		// enough: a failed download leaves an empty dir behind, so require the
-		// manifest that confirmPaths() looks for.
-		if (fs.existsSync(path.join(addonPath, "manifest.json"))) {
-			addonsList?.push(addonPath);
-			continue;
+		if (!fs.existsSync(path.join(addonPath, "manifest.json"))) {
+			await installAddon(addonName, url, addonPath);
 		}
-
-		try {
-			fs.mkdirSync(addonPath, { recursive: true });
-			await addonsDeps.downloadAndExtract(url, addonPath, addonName);
-			addonsList?.push(addonPath);
-		} catch (e) {
-			// Drop the partial directory so the next run re-downloads.
-			fs.rmSync(addonPath, { recursive: true, force: true });
-			console.log(`Failed to download and extract ${addonName}: ${e}`);
-		}
+		addonsList?.push(addonPath);
 	}
 }
