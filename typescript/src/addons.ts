@@ -7,14 +7,22 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { InvalidAddonPath } from "./exceptions.js";
-import { INSTALL_DIR } from "./paths.js";
-import { unzip, webdl } from "./pkgman.js";
+import { INSTALL_DIR, loadDataFile } from "./paths.js";
+import { unzip, verifySha256, webdl } from "./pkgman.js";
+
+interface AddonPin {
+	version: string;
+	url: string;
+	sha256: string;
+}
+
+const PINS: Record<string, AddonPin> = loadDataFile("addons.json");
 
 /**
  * Default addons to be downloaded.
  */
 export const DefaultAddons = {
-	UBO: "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi",
+	UBO: PINS.UBO.url,
 } as const;
 
 export type DefaultAddon = keyof typeof DefaultAddons;
@@ -63,14 +71,15 @@ export async function downloadAndExtract(
 	name: string,
 ): Promise<void> {
 	const buffer = await webdl(url, `Downloading addon (${name})`, false);
+	verifySha256(buffer, PINS[name].sha256, `addon (${name})`);
 	unzip(buffer, extractPath, `Extracting addon (${name})`, false);
 }
 
 /**
- * Returns a path to the addon in the shared addons folder.
+ * Returns a path to the pinned version of the addon in the shared addons folder.
  */
 export function getAddonPath(addonName: string): string {
-	return path.join(ADDONS_DIR, addonName);
+	return path.join(ADDONS_DIR, addonName, PINS[addonName].version);
 }
 
 /** Seams the Python tests reach with monkeypatch. */

@@ -117,5 +117,48 @@ it("never hands a concurrent launch a half-extracted addon", async () => {
 		await first;
 	}
 	expect(firstOut).toEqual([ubo]);
-	expect(fs.readdirSync(path.dirname(ubo))).toEqual(["UBO"]);
+	expect(fs.readdirSync(path.dirname(ubo))).toEqual([path.basename(ubo)]);
+});
+
+const PINS = JSON.parse(
+	fs.readFileSync(
+		path.join(import.meta.dirname, "../../python/src/camoufox/addons.json"),
+		"utf-8",
+	),
+);
+
+it("pins every default addon to one file", () => {
+	for (const [name, url] of Object.entries(addons.DefaultAddons)) {
+		const pin = PINS[name];
+		expect(url).toBe(pin.url);
+		expect(pin.url).toContain(`-${pin.version}.xpi`);
+		expect(pin.sha256).toMatch(/^[0-9a-f]{64}$/);
+	}
+});
+
+it("caches each pinned version in its own directory", () => {
+	// A cache filled by another release must not stand in for this one's pin.
+	expect(ubo).toBe(
+		path.join(tmp, "camoufox", "addons", "UBO", PINS.UBO.version),
+	);
+});
+
+it("rejects a download that does not match the pin", async () => {
+	vi.doMock("../src/pkgman.js", async (importOriginal) => ({
+		...(await importOriginal<typeof import("../src/pkgman.js")>()),
+		webdl: async () => Buffer.from("not the pinned xpi"),
+	}));
+	vi.resetModules();
+	const mocked: Addons = await import("../src/addons.js");
+	const { CorruptedDownload } = await import("../src/exceptions.js");
+
+	try {
+		await expect(
+			mocked.maybeDownloadAddons({ ...mocked.DefaultAddons }, []),
+		).rejects.toBeInstanceOf(CorruptedDownload);
+		const dir = path.dirname(ubo);
+		expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([]);
+	} finally {
+		vi.doUnmock("../src/pkgman.js");
+	}
 });

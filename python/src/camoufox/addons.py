@@ -1,14 +1,18 @@
+import json
 import os
 import shutil
 import uuid
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional
 
 from .exceptions import InvalidAddonPath
-from .pkgman import INSTALL_DIR, unzip, webdl
+from .pkgman import INSTALL_DIR, unzip, verify_sha256, webdl
 
 # Addons are stored in a shared folder, not per-browser version
 ADDONS_DIR = INSTALL_DIR / "addons"
+
+PINS = json.loads((Path(__file__).parent / 'addons.json').read_text(encoding='utf-8'))
 
 
 class DefaultAddons(Enum):
@@ -16,7 +20,7 @@ class DefaultAddons(Enum):
     Default addons to be downloaded
     """
 
-    UBO = "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
+    UBO = PINS['UBO']['url']
 
 
 def confirm_paths(paths: List[str]) -> None:
@@ -52,14 +56,15 @@ def download_and_extract(url: str, extract_path: str, name: str) -> None:
     """
     # Create a temporary file to store the downloaded zip
     buffer = webdl(url, desc=f"Downloading addon ({name})", bar=False)
+    verify_sha256(buffer, PINS[name]['sha256'], f"addon ({name})")
     unzip(buffer, extract_path, f"Extracting addon ({name})", bar=False)
 
 
 def get_addon_path(addon_name: str) -> str:
     """
-    Returns a path to the addon in the shared addons folder.
+    Returns a path to the pinned version of the addon in the shared addons folder.
     """
-    return str(ADDONS_DIR / addon_name)
+    return str(ADDONS_DIR / addon_name / PINS[addon_name]['version'])
 
 
 def install_addon(addon: DefaultAddons, addon_path: str) -> None:
