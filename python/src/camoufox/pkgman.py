@@ -642,13 +642,13 @@ class CamoufoxFetcher:
         """
         Fetch releases from a single GitHub repo
         """
-        return github_api(f"repos/{github_repo}/releases")
+        return github_releases(github_repo)
 
     def get_asset(self) -> Tuple[Version, str]:
         """
         Fetch the first matching release asset, trying fallback repos on failure
         """
-        last_error = None
+        errors = []
         for repo in self.github_repos:
             try:
                 releases = self._get_releases(repo)
@@ -659,11 +659,11 @@ class CamoufoxFetcher:
                             self.is_prerelease = release.get('prerelease', False)
                             return data
             except Exception as e:
-                last_error = e
-                continue
+                errors.append(e)
 
-        if last_error:
-            raise last_error
+        # The first repo's error is the cause; a fallback's 404 would hide it.
+        if len(errors) == len(self.github_repos):
+            raise errors[0]
         self.missing_asset_error()
 
     def get_platform_arch(self) -> str:
@@ -738,6 +738,18 @@ def github_api(path: str) -> Any:
     return resp.json()
 
 
+def github_releases(repo: str) -> List[Dict]:
+    """
+    The newest page of a repo's releases. GitHub sometimes answers 200 with an
+    empty list; that is retried once, then raised, so it never reads as a repo
+    with no releases.
+    """
+    for _ in range(2):
+        if releases := github_api(f"repos/{repo}/releases"):
+            return releases
+    raise MissingRelease(f"GitHub listed no releases for {repo}")
+
+
 def list_available_versions(
     repo_config: Optional[RepoConfig] = None,
     include_prerelease: bool = True,
@@ -758,17 +770,16 @@ def list_available_versions(
     if arch not in OS_ARCH_MATRIX.get(os_name, []):
         raise UnsupportedArchitecture(f"Architecture {arch} is not supported for {os_name}")
 
-    releases = []
-    last_error = None
+    errors = []
     for repo in config.repos:
         try:
-            releases = github_api(f"repos/{repo}/releases")
+            releases = github_releases(repo)
             break
         except Exception as e:
-            last_error = e
-            continue
-    if not releases and last_error:
-        raise last_error
+            errors.append(e)
+    else:
+        # The first repo's error is the cause; a fallback's 404 would hide it.
+        raise errors[0]
 
     versions = [
         v

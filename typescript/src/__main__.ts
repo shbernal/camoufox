@@ -229,6 +229,10 @@ async function doSync(spoofOs?: string, spoofArch?: string): Promise<boolean> {
 		spoof_os: spoofOs ?? null,
 		spoof_arch: spoofArch ?? null,
 	};
+	const previous = loadRepoCache();
+	const samePlatform =
+		(previous.spoof_os ?? null) === cache.spoof_os &&
+		(previous.spoof_arch ?? null) === cache.spoof_arch;
 
 	for (const repoConfig of RepoConfig.loadRepos()) {
 		rprint(`  ${repoConfig.name}...`, "cyan", false);
@@ -272,6 +276,20 @@ async function doSync(spoofOs?: string, spoofArch?: string): Promise<boolean> {
 			rprint(` ${versions.length} versions`, "green");
 		} catch (e) {
 			rprint(` Error: ${errorMessage(e)}`, "red");
+			// One failed request must not leave fetch with nothing to install.
+			const kept = samePlatform ? repoData(previous, repoConfig.name) : null;
+			if (kept) {
+				cache.repos.push(kept as (typeof cache.repos)[number]);
+				cache.incompatible.push(
+					...((previous.incompatible ?? []) as IncompatibleBuild[]).filter(
+						(v) => v.repo === repoConfig.name,
+					),
+				);
+				rprint(
+					`    Keeping its ${kept.versions?.length ?? 0} cached versions.`,
+					"yellow",
+				);
+			}
 		}
 	}
 

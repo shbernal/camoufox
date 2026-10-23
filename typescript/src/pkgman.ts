@@ -674,15 +674,23 @@ export function resetOutdatedWarning(): void {
 	outdatedWarned = false;
 }
 
-/** A GitHub repo's releases, newest first. */
+/**
+ * The newest page of a repo's releases. GitHub sometimes answers 200 with an
+ * empty list; that is retried once, then thrown, so it never reads as a repo
+ * with no releases.
+ */
 async function githubReleases(repo: string): Promise<GitHubRelease[]> {
 	const apiUrl = `https://api.github.com/repos/${repo}/releases`;
-	const response = await request(apiUrl, {
-		headers: githubHeaders(apiUrl),
-		signal: AbortSignal.timeout(20_000),
-	});
-	raiseForStatus(response, apiUrl);
-	return (await response.json()) as GitHubRelease[];
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const response = await request(apiUrl, {
+			headers: githubHeaders(apiUrl),
+			signal: AbortSignal.timeout(20_000),
+		});
+		raiseForStatus(response, apiUrl);
+		const releases = (await response.json()) as GitHubRelease[];
+		if (releases.length) return releases;
+	}
+	throw new MissingRelease(`GitHub listed no releases for ${repo}`);
 }
 
 /**
@@ -864,7 +872,7 @@ export class CamoufoxFetcher {
 	 * Fetch the first matching release asset, trying fallback repos on failure.
 	 */
 	async getAsset(): Promise<[Version, string]> {
-		let lastError: unknown;
+		const errors: unknown[] = [];
 		for (const repo of this.githubRepos) {
 			try {
 				const releases = await this.getReleases(repo);
@@ -879,11 +887,12 @@ export class CamoufoxFetcher {
 					}
 				}
 			} catch (error) {
-				lastError = error;
+				errors.push(error);
 			}
 		}
 
-		if (lastError) throw lastError;
+		// The first repo's error is the cause; a fallback's 404 would hide it.
+		if (errors.length === this.githubRepos.length) throw errors[0];
 		this.missingAssetError();
 	}
 
@@ -980,17 +989,18 @@ export async function listAvailableVersions(
 		);
 	}
 
-	let releases: GitHubRelease[] = [];
-	let lastError: unknown;
+	let releases: GitHubRelease[] | undefined;
+	const errors: unknown[] = [];
 	for (const repo of config.repos) {
 		try {
 			releases = await githubReleases(repo);
 			break;
 		} catch (error) {
-			lastError = error;
+			errors.push(error);
 		}
 	}
-	if (!releases.length && lastError) throw lastError;
+	// The first repo's error is the cause; a fallback's 404 would hide it.
+	if (!releases) throw errors[0];
 
 	const versions: AvailableVersion[] = [];
 	for (const release of releases) {
