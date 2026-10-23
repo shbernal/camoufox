@@ -765,25 +765,34 @@ export class CamoufoxFetcher {
 		this.arch = this.getPlatformArch();
 		this.pattern = this.repoConfig.buildPattern();
 
-		if (selectedVersion) {
-			this._selectedVersion = selectedVersion;
-			this._versionObj = selectedVersion.version;
-			this._url = selectedVersion.url;
-			this.isPrerelease = selectedVersion.isPrerelease;
-			this.installedSha256 = selectedVersion.sha256;
-			this.installedCreatedAt = selectedVersion.assetCreatedAt;
-			this.installedInterface = selectedVersion.interface;
-		}
+		if (selectedVersion) this.select(selectedVersion);
+	}
+
+	private select(selectedVersion: AvailableVersion): void {
+		this._selectedVersion = selectedVersion;
+		this._versionObj = selectedVersion.version;
+		this._url = selectedVersion.url;
+		this.isPrerelease = selectedVersion.isPrerelease;
+		this.installedSha256 = selectedVersion.sha256;
+		this.installedCreatedAt = selectedVersion.assetCreatedAt;
+		this.installedInterface = selectedVersion.interface;
 	}
 
 	/**
-	 * The Python constructor calls fetch_latest() inline; downloads are async in
+	 * The Python constructor resolves the build inline; requests are async in
 	 * JS, so callers do `await new CamoufoxFetcher().init()` instead.
 	 */
 	async init(): Promise<this> {
-		if (!this._versionObj) {
-			await this.fetchLatest();
-		}
+		if (this._versionObj) return this;
+		// The release listing holds only the newest page, which an older paired
+		// build drops out of; its own release always has it.
+		const pin = effectivePin(loadConfig());
+		const paired =
+			pin && pin.repoName === this.repoConfig.name.toLowerCase()
+				? await taggedBuild(this.repoConfig, pin.tag, pinSpec(pin))
+				: null;
+		if (paired) this.select(paired);
+		else await this.fetchLatest();
 		return this;
 	}
 
@@ -1014,13 +1023,15 @@ export async function listAvailableVersions(
 }
 
 /**
- * The supported builds the release tagged `tag` holds for this platform, read
- * with one API call per repo of the source. Empty when no repo has the tag.
+ * The build `spec` names, for this platform, read from the release tagged
+ * `tag` with one API call per repo of the source. Null when no repo has the
+ * tag or the release does not hold that build.
  */
-export async function taggedVersions(
+export async function taggedBuild(
 	repoConfig: RepoConfig,
 	tag: string,
-): Promise<AvailableVersion[]> {
+	spec: string,
+): Promise<AvailableVersion | null> {
 	for (const repo of repoConfig.repos) {
 		const apiUrl = `https://api.github.com/repos/${repo}/releases/tags/${tag}`;
 		const response = await request(apiUrl, {
@@ -1029,13 +1040,14 @@ export async function taggedVersions(
 		});
 		if (response.status === 404) continue;
 		raiseForStatus(response, apiUrl);
-		return releaseVersions(
+		const versions = await releaseVersions(
 			(await response.json()) as GitHubRelease,
 			repoConfig,
 			repoConfig.buildPattern(),
 		);
+		return versions.find((v) => v.version.fullString === spec) ?? null;
 	}
-	return [];
+	return null;
 }
 
 /**

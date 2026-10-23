@@ -87,6 +87,14 @@ def _release(served, tag, build, version="156.0.1", prerelease=False):
     }
 
 
+def _pair(tmp_path, tag="v156.0.1-beta.33", build="beta.33"):
+    """Stamp the release's browser pin, as ci/release.py does."""
+    (tmp_path / "browser-pin.json").write_text(json.dumps({
+        "tag": tag, "repo": "daijro/camoufox", "repo_name": "Official",
+        "version": "156.0.1", "build": build,
+    }))
+
+
 def _api_requests(requested):
     return [url for url in requested if url.startswith("https://api.github.com/")]
 
@@ -104,10 +112,7 @@ def test_a_named_build_is_fetched_with_one_api_call(github, installs):
 
 def test_the_paired_build_is_fetched_with_one_api_call(github, installs, tmp_path):
     served, requested = github
-    (tmp_path / "browser-pin.json").write_text(json.dumps({
-        "tag": "v156.0.1-beta.33", "repo": "daijro/camoufox", "repo_name": "Official",
-        "version": "156.0.1", "build": "beta.33",
-    }))
+    _pair(tmp_path)
     served[f"{API}/tags/v156.0.1-beta.33"] = _release(served, "v156.0.1-beta.33", "beta.33", prerelease=True)
 
     result = CliRunner().invoke(cli.cli, ["fetch"])
@@ -115,6 +120,21 @@ def test_the_paired_build_is_fetched_with_one_api_call(github, installs, tmp_pat
     assert result.exit_code == 0, result.output
     assert _api_requests(requested) == [f"{API}/tags/v156.0.1-beta.33"]
     assert installs == [("Official", "156.0.1-beta.33", True)]
+
+
+def test_a_launch_installs_the_paired_build_with_one_api_call(github, installs, tmp_path):
+    """The install a first launch triggers reads the paired build's own release
+    too: the release listing holds only the newest page, which an older paired
+    build drops out of."""
+    served, requested = github
+    _pair(tmp_path)
+    served[f"{API}/tags/v156.0.1-beta.33"] = _release(served, "v156.0.1-beta.33", "beta.33", prerelease=True)
+
+    fetcher = pkgman.CamoufoxFetcher()
+
+    assert fetcher.verstr == "156.0.1-beta.33"
+    assert fetcher.is_prerelease
+    assert _api_requests(requested) == [f"{API}/tags/v156.0.1-beta.33"]
 
 
 def test_a_build_without_its_own_tag_is_found_by_syncing(github, installs, monkeypatch):

@@ -53,7 +53,7 @@ from .pkgman import (
     interface_supported,
     list_available_versions,
     rprint,
-    tagged_versions,
+    tagged_build,
     upgrade_message,
 )
 
@@ -338,10 +338,9 @@ def _tagged_build(
     if repo_config is None:
         return None
     try:
-        versions = tagged_versions(repo_config, tag)
+        match = tagged_build(repo_config, tag, spec)
     except requests.RequestException as e:
         _fail(f"Error: {e}")
-    match = next((v for v in versions if v.version.full_string == spec), None)
     return (repo_config, match) if match else None
 
 
