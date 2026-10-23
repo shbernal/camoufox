@@ -132,6 +132,8 @@ def _do_sync(spoof_os=None, spoof_arch=None) -> bool:
     rprint("Syncing repositories...", fg="yellow")
 
     cache = {"repos": [], "incompatible": [], "spoof_os": spoof_os, "spoof_arch": spoof_arch}
+    previous = load_repo_cache()
+    same_platform = (previous.get("spoof_os"), previous.get("spoof_arch")) == (spoof_os, spoof_arch)
 
     for repo_config in RepoConfig.load_repos():
         rprint(f"  {repo_config.name}...", fg="cyan", nl=False)
@@ -177,6 +179,14 @@ def _do_sync(spoof_os=None, spoof_arch=None) -> bool:
             rprint(f" {len(versions)} versions", fg="green")
         except Exception as e:
             rprint(f" Error: {e}", fg="red")
+            # One failed request must not leave fetch with nothing to install.
+            kept = _repo_data(previous, repo_config.name) if same_platform else None
+            if kept:
+                cache["repos"].append(kept)
+                cache["incompatible"] += [
+                    v for v in previous.get("incompatible", []) if v["repo"] == repo_config.name
+                ]
+                rprint(f"    Keeping its {len(kept['versions'])} cached versions.", fg="yellow")
 
     save_repo_cache(cache)
     if cache["incompatible"]:
