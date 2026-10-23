@@ -65,7 +65,7 @@ import {
 	listAvailableVersions,
 	RepoConfig,
 	resolvedPlaywrightVersionRaw,
-	taggedVersions,
+	taggedBuild,
 	upgradeMessage,
 	Version,
 } from "./pkgman.js";
@@ -445,16 +445,14 @@ function fail(message: string): never {
  * The build `spec` names, read from its own release with one API call. Null
  * when the source has no such tag: early builds were published under others.
  */
-async function taggedBuild(
+async function namedTaggedBuild(
 	repoName: string,
 	tag: string,
 	spec: string,
 ): Promise<[RepoConfig, AvailableVersion] | null> {
 	const repoConfig = RepoConfig.findByName(repoName);
 	if (!repoConfig) return null;
-	const match = (await taggedVersions(repoConfig, tag)).find(
-		(v) => v.version.fullString === spec,
-	);
+	const match = await taggedBuild(repoConfig, tag, spec);
 	return match ? [repoConfig, match] : null;
 }
 
@@ -655,7 +653,10 @@ program
 		}
 
 		const [repoConfig, selected] =
-			(repoName && spec && tag && (await taggedBuild(repoName, tag, spec))) ||
+			(repoName &&
+				spec &&
+				tag &&
+				(await namedTaggedBuild(repoName, tag, spec))) ||
 			(await syncedBuild(config, repoName, spec, pin));
 		try {
 			const updater = await new CamoufoxUpdate(repoConfig, selected).init();

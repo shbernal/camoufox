@@ -32,6 +32,7 @@ afterEach(() => {
 	if (savedXdg === undefined) delete process.env.XDG_CACHE_HOME;
 	else process.env.XDG_CACHE_HOME = savedXdg;
 	fs.rmSync(tmp, { recursive: true, force: true });
+	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 });
 
@@ -232,5 +233,37 @@ describe("the fetcher", () => {
 			prerelease: false,
 		});
 		expect(newer !== null).toBe(acceptsNewer);
+	});
+
+	it("reads the paired build from its own release", async () => {
+		// The release listing holds only the newest page, which an older paired
+		// build drops out of.
+		const { pkgman } = await setup({ pin: PIN, installed: [], config: {} });
+		const official = pkgman.RepoConfig.getDefault();
+		const tagUrl = `https://api.github.com/repos/${PIN.repo}/releases/tags/${PIN.tag}`;
+		const requested: string[] = [];
+		vi.stubGlobal("fetch", async (url: string) => {
+			requested.push(url);
+			if (url !== tagUrl)
+				return new Response("", { status: 404, statusText: "Not Found" });
+			return new Response(
+				JSON.stringify({
+					tag_name: PIN.tag,
+					prerelease: true,
+					assets: [
+						{
+							name: `camoufox-156.0.1-beta.33-${official.getOsName()}.${official.getArch()}.zip`,
+							browser_download_url: "https://example.invalid/browser.zip",
+						},
+					],
+				}),
+			);
+		});
+
+		const fetcher = await new pkgman.CamoufoxFetcher().init();
+
+		expect(fetcher.verstr).toBe("156.0.1-beta.33");
+		expect(fetcher.isPrerelease).toBe(true);
+		expect(requested).toEqual([tagUrl]);
 	});
 });

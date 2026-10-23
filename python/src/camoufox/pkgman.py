@@ -580,6 +580,15 @@ class CamoufoxFetcher:
         self.installed_created_at: Optional[str] = None
         self.installed_interface: int = 1
 
+        if selected_version is None:
+            from .browser_pin import effective_pin
+
+            # The release listing holds only the newest page, which an older
+            # paired build drops out of; its own release always has it.
+            pin = effective_pin()
+            if pin and pin.repo_name == self.repo_config.name.lower():
+                selected_version = tagged_build(self.repo_config, pin.tag, pin.spec)
+
         if selected_version:
             self._selected_version = selected_version
             self._version_obj = selected_version.version
@@ -779,10 +788,11 @@ def list_available_versions(
     return versions
 
 
-def tagged_versions(repo_config: RepoConfig, tag: str) -> List[AvailableVersion]:
+def tagged_build(repo_config: RepoConfig, tag: str, spec: str) -> Optional[AvailableVersion]:
     """
-    The supported builds the release tagged `tag` holds for this platform, read
-    with one API call per repo of the source. Empty when no repo has the tag.
+    The build `spec` names, for this platform, read from the release tagged
+    `tag` with one API call per repo of the source. None when no repo has the
+    tag or the release does not hold that build.
     """
     for repo in repo_config.repos:
         try:
@@ -791,8 +801,9 @@ def tagged_versions(repo_config: RepoConfig, tag: str) -> List[AvailableVersion]
             if e.response is not None and e.response.status_code == 404:
                 continue
             raise
-        return release_versions(release, repo_config, repo_config.build_pattern())
-    return []
+        versions = release_versions(release, repo_config, repo_config.build_pattern())
+        return next((v for v in versions if v.version.full_string == spec), None)
+    return None
 
 
 def release_versions(
